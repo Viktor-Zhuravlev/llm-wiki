@@ -7,7 +7,10 @@ description: >
   outputs. Activates for /wiki commands; wiki or knowledge-base work; ingest,
   collect, catalog, compile, query, audit, librarian, inventory, idea,
   portfolio, business ideas, projects, datasets, archives, sessions, feedback,
-  private adapters, adapter routing, provenance, external resource actions, or questions in a directory
+  checkpoints,
+  private adapters, adapter routing, explicit wiki skill-factory requests,
+  personal specialist skills, expert review,
+  specialist selection, provenance, external resource actions, or questions in a directory
   with .wiki/ or a configured hub.
 tools:
   - Read
@@ -102,12 +105,27 @@ outputs remain in separately controlled external data planes. Only reviewed
 compilation workflows. See
 [references/adapters.md](references/adapters.md).
 
+14. **Specialists are bounded methods, not credentials.** Personal,
+instruction-only specialist packages live locally under `HUB/.skills/` and are
+enabled per active topic. Loading one never grants tools, write access, professional
+authority, or permission to spawn agents. Select the minimum useful method,
+preserve disagreement, and record its version/hash. See
+[references/specialists.md](references/specialists.md).
+
+15. **Project checkpoints need comprehensive coverage and a privacy seal.** See
+[references/checkpoints.md](references/checkpoints.md).
+
 ## Adapter Routing
 
 For an action plus URL, run `adapter route --intent <effect> --resource <url>
 --json` before ingestion. On a match, read its adapter-owned guide; provider
 steps live there. A URL alone is not write authorization. See
 [references/adapters.md](references/adapters.md).
+
+Explicit `wiki skill-factory <request>` selects the registered named adapter;
+do not invent a URL route. Run show/doctor and read its guide. It never
+activates ambiently, and its external candidates remain disabled; installation,
+topic enablement, commit, and publication are separate actions.
 
 ## Ambient Behavior
 
@@ -147,6 +165,17 @@ JSON request through the bundled deterministic CLI → verify artifact paths and
 hashes → leave all outputs external → optionally review only `wiki-safe`
 candidates and promote the smallest useful evidence through normal wiki writes.
 Never clone, install, update, publish, or auto-promote an adapter.
+
+### Personal Specialist Skills
+See [references/specialists.md](references/specialists.md).
+Flow: maintain user-owned instruction-only `SKILL.md` methods under
+`HUB/.skills/` → validate structure and safety boundaries → explicitly enable
+stable names per active topic → select zero to three by task features, normally
+one → give selected methods the same bounded evidence packet → verify and
+synthesize by evidence strength → record name, version, and content hash. Use
+`/wiki:specialist suggest` for an index-first candidate scan and
+`/wiki:specialist apply` for a bounded review. Do not treat titles such as CFO,
+doctor, MBA, or PhD as credentials or capability upgrades.
 
 ### Inventory
 See [references/inventory.md](references/inventory.md).
@@ -281,7 +310,7 @@ See `references/research-infrastructure.md` § Agent Prompt Templates for exampl
 
 ## Activity Log
 
-Every wiki operation appends to `log.md` in the wiki root. Format: `## [YYYY-MM-DD] operation | Description`. See [references/wiki-structure.md](references/wiki-structure.md) for full format. Never edit or delete existing log entries — append only.
+Every wiki operation appends to `log.md` in the wiki root. Format: `## [YYYY-MM-DD] operation | Description`. See [references/wiki-structure.md](references/wiki-structure.md) for full format. Never edit or delete existing log entries except during an explicit user-directed retraction with `--remove-from-logs`.
 
 ## Confidence Scoring
 
@@ -310,7 +339,7 @@ Automatically run a quick structural check when any of these triggers occur:
 
 ### Quick Structure Check (lightweight, runs inline — not a full lint)
 
-1. **Hub integrity**: The hub (HUB) should ONLY contain `wikis.json`, `_index.md`, `log.md`, `topics/`, and optional `.sessions/`. If `raw/`, `wiki/`, `inventory/`, `datasets/`, `output/`, `inbox/`, or `config.md` exist at the hub level → **warn, do not delete**. These may hold user data from an older wiki layout. Suggest `/wiki:lint --fix`, which will move contents to the appropriate topic wiki, repair archive registry drift, or quarantine to `inbox/.unknown/` per C11/C12/C16/C17/C19 in `references/linting.md`.
+1. **Hub integrity**: The hub (HUB) should ONLY contain `wikis.json`, `_index.md`, `log.md`, `topics/`, and optional `.sessions/` and `.skills/`. Validate `.skills/` against the instruction-only package and active-topic allowlist contract. If `raw/`, `wiki/`, `inventory/`, `datasets/`, `output/`, `inbox/`, or `config.md` exist at the hub level → **warn, do not delete**. These may hold user data from an older wiki layout. Suggest `/wiki:lint --fix`, which will move contents to the appropriate topic wiki, repair archive registry drift, or quarantine to `inbox/.unknown/` per C11/C12/C16/C17/C19 in `references/linting.md`.
 
 2. **Index freshness**: For the active topic wiki, compare actual file counts in `raw/`, `wiki/`, `inventory/`, and `datasets/` subdirectories against the rows in their `_index.md`. Ignore maintenance/report areas such as `.librarian/` and `.audit/`. If mismatched → auto-fix by regenerating the affected directory index from frontmatter and removing dead entries.
 
@@ -338,7 +367,7 @@ Automatically run a quick structural check when any of these triggers occur:
 Multiple Claude Code sessions can safely read and write to the same wiki simultaneously. No locks are needed.
 
 - **Indexes** are derived from the actual files on disk. If two sessions write articles at the same time, the next read rebuilds the index from whatever files exist. Both rebuilds converge to the same correct result.
-- **log.md** is append-only with small atomic writes. Concurrent appends are safe.
+- **log.md** is append-only with small atomic writes. Concurrent appends are safe. The explicit privacy-retraction exception rewrites the file atomically and should not run concurrently with other wiki writes.
 - **Article/source files** are written independently. Two sessions creating different files never conflict. Two sessions editing the same file is unlikely and handled by last-write-wins (acceptable for a wiki — the content is always rebuildable from raw sources).
 
 See [references/indexing.md](references/indexing.md) for the Derived Index Protocol.

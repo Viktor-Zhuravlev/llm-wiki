@@ -3,14 +3,16 @@ name: wiki
 description: >
   Manage LLM-compiled wikis in Codex: ingest/import, shape/promote Ideas,
   review portfolios, track inventory/datasets, archive, compile/query/lint/audit,
-  research/plan, manage sessions/private adapters, and generate outputs.
+  research/plan, manage sessions, private adapters, personal specialists, and outputs.
   Activates when the user mentions wiki workflows, knowledge-base management,
   ingestion, collection ingestion, import wiki, collect, catalog, curate,
   find all, idea, turn idea into project, portfolio, business ideas, projects, inventory, source queue,
   candidate list, watch list, backlog, dataset, large data, data registry,
   dataset manifest, compilation, querying, linting, audit, research, librarian,
   scan quality, article quality, content review, output drift, provenance,
-  archive wiki, archive topic, restore wiki, private adapter, adapter registry,
+  archive wiki, archive topic, restore wiki, private adapter, adapter registry, skill-factory,
+  checkpoints,
+  personal specialist, specialist skill, specialist reviewer, expert lens,
   adapter route, adapter doctor, adapter run, edit an external resource, session capture, capture context, rehydrate,
   resume from session, implementation plan, or uses
   /wiki-style shorthand in a repo with .wiki/, ~/wiki/, or a configured hub path.
@@ -102,12 +104,27 @@ outputs remain in separately controlled external data planes. Only reviewed
 compilation workflows. See
 [references/adapters.md](references/adapters.md).
 
+14. **Specialists are bounded methods, not credentials.** Personal,
+instruction-only specialist packages live locally under `HUB/.skills/` and are
+enabled per active topic. Loading one never grants tools, write access, professional
+authority, or permission to spawn agents. Select the minimum useful method,
+preserve disagreement, and record its version/hash. See
+[references/specialists.md](references/specialists.md).
+
+15. **Project checkpoints need comprehensive coverage and a privacy seal.** See
+[references/checkpoints.md](references/checkpoints.md).
+
 ## Adapter Routing
 
 For an action plus URL, run `adapter route --intent <effect> --resource <url>
 --json` before ingestion. On a match, read its adapter-owned guide; provider
 steps live there. A URL alone is not write authorization. See
 [references/adapters.md](references/adapters.md).
+
+Explicit `wiki skill-factory <request>` selects the registered named adapter;
+do not invent a URL route. Run show/doctor and read its guide. It never
+activates ambiently, and its external candidates remain disabled; installation,
+topic enablement, commit, and publication are separate actions.
 
 ## Ambient Behavior
 
@@ -148,6 +165,7 @@ reference material you need for that workflow:
 - `audit` → `references/audit.md`
 - `research`, `plan`, `output`, `assess` → `references/research-infrastructure.md`
 - `project` → `references/projects.md`
+- `checkpoint` → `references/checkpoints.md`
 - `librarian` → `references/librarian.md`
 - wiki structure, indexes, log format, file placement, init → `references/wiki-structure.md`
 - hub lookup and path handling → `references/hub-resolution.md`

@@ -49,7 +49,230 @@ else
   log_fail "scripts/llm-wiki is executable" "missing executable bit"
 fi
 
+set +e
+portable_path_output="$(python3 - "$CLI" <<'PY' 2>&1
+import runpy
+import sys
+from pathlib import PureWindowsPath
+
+namespace = runpy.run_path(sys.argv[1])
+
+normalize_windows = namespace["normalize_windows_absolute_path"]
+assert normalize_windows(r"C:\Users\person\wiki", platform="nt") == (
+    "C:/Users/person/wiki"
+)
+assert normalize_windows("C:/Users/person/wiki", platform="nt") == (
+    "C:/Users/person/wiki"
+)
+assert normalize_windows("/C:/Users/person/wiki", platform="nt") == (
+    "C:/Users/person/wiki"
+)
+assert normalize_windows("topics/example", platform="nt") is None
+assert normalize_windows(r"C:\Users\person\wiki", platform="posix") is None
+
+# Exercise the link helper with Windows-native relpath output even when this
+# test suite runs on POSIX. PureWindowsPath makes as_posix() behavior
+# deterministic without requiring a Windows runner.
+link_helper = namespace["markdown_relative_link"]
+original_path = link_helper.__globals__["Path"]
+original_relpath = link_helper.__globals__["os"].path.relpath
+try:
+    link_helper.__globals__["Path"] = PureWindowsPath
+    link_helper.__globals__["os"].path.relpath = (
+        lambda _target, _base: r"..\..\raw\articles\source.md"
+    )
+    assert link_helper(PureWindowsPath("base"), PureWindowsPath("target")) == (
+        "../../raw/articles/source.md"
+    )
+finally:
+    link_helper.__globals__["Path"] = original_path
+    link_helper.__globals__["os"].path.relpath = original_relpath
+
+
+class FakeResolvedPath:
+    def __init__(self, relative: str) -> None:
+        self.relative = relative
+
+    def resolve(self):
+        return self
+
+    def relative_to(self, _root):
+        return PureWindowsPath(self.relative)
+
+
+ctx = object.__new__(namespace["LintContext"])
+ctx.root = FakeResolvedPath("")
+assert ctx.rel(FakeResolvedPath(r"raw\articles\source.md")) == (
+    "raw/articles/source.md"
+)
+PY
+)"
+portable_path_rc=$?
+set -e
+if [ "$portable_path_rc" -eq 0 ]; then
+  log_pass "generated wiki paths use portable separators"
+else
+  log_fail "generated wiki paths use portable separators" "$portable_path_output"
+fi
+
 expect_success "golden wiki passes local lint" "$CLI" lint "$GOLDEN"
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+hybrid_rollup="$tmpdir/hybrid-rollup"
+mkdir "$hybrid_rollup"
+cp -R "$SCRIPT_DIR/fixtures/defects/stale-inventory-rollup/." "$hybrid_rollup/"
+expect_failure_contains \
+  "hybrid inventory root reports a missing nested record rollup" \
+  "Required inventory navigation or record rollup entry is missing" \
+  "$CLI" lint "$hybrid_rollup"
+set +e
+hybrid_fix_output="$("$CLI" lint --fix "$hybrid_rollup" 2>&1)"
+hybrid_fix_rc=$?
+set -e
+if [ "$hybrid_fix_rc" -eq 0 ] \
+  && grep -q 'items/unlisted-item.md' "$hybrid_rollup/inventory/_index.md" \
+  && grep -q '\[Items\](items/_index.md)' "$hybrid_rollup/inventory/_index.md" \
+  && grep -q '| File | Kind | Status | Priority | Next Action | Updated |' "$hybrid_rollup/inventory/_index.md"; then
+  log_pass "--fix restores inventory hybrid navigation and nested record rollup"
+else
+  log_fail "--fix restores inventory hybrid navigation and nested record rollup" "$hybrid_fix_output"
+fi
+
+pointer_index="$tmpdir/pointer-index"
+mkdir "$pointer_index"
+cp -R "$SCRIPT_DIR/fixtures/defects/empty-wiki-pointer-index/." "$pointer_index/"
+expect_failure_contains \
+  "empty wiki pointer index is reported as missing category navigation" \
+  "Required wiki category pointer entry is missing" \
+  "$CLI" lint "$pointer_index"
+set +e
+pointer_fix_output="$("$CLI" lint --fix "$pointer_index" 2>&1)"
+pointer_fix_rc=$?
+set -e
+if [ "$pointer_fix_rc" -eq 0 ] \
+  && grep -q '\[concepts/_index.md\](concepts/_index.md)' "$pointer_index/wiki/_index.md" \
+  && grep -q '\[theses/_index.md\](theses/_index.md)' "$pointer_index/wiki/_index.md" \
+  && ! grep -q 'sample-concept.md' "$pointer_index/wiki/_index.md"; then
+  log_pass "--fix restores wiki category pointers without flattening articles"
+else
+  log_fail "--fix restores wiki category pointers without flattening articles" "$pointer_fix_output"
+fi
+
+domain_renderers="$tmpdir/domain-renderers"
+mkdir "$domain_renderers"
+cp -R "$GOLDEN/." "$domain_renderers/"
+mkdir -p "$domain_renderers/output/projects/example-project"
+cat > "$domain_renderers/output/projects/example-project/WHY.md" <<'EOF'
+# Example Project
+
+Preserve project-aware output navigation while repairing the root index.
+EOF
+printf '# Dataset Registry Index\n' > "$domain_renderers/datasets/_index.md"
+printf '# Output Artifacts\n' > "$domain_renderers/output/_index.md"
+set +e
+domain_fix_output="$("$CLI" lint --fix "$domain_renderers" 2>&1)"
+domain_fix_rc=$?
+set -e
+if [ "$domain_fix_rc" -eq 0 ] \
+  && grep -q '| Dataset | Status | Storage | Formats | Size | Records | Updated |' "$domain_renderers/datasets/_index.md" \
+  && grep -q 'bitcointalk-temporal-graph/MANIFEST.md' "$domain_renderers/datasets/_index.md" \
+  && grep -q '| Output | Type | Date |' "$domain_renderers/output/_index.md" \
+  && grep -q 'projects/example-project/WHY.md' "$domain_renderers/output/_index.md"; then
+  log_pass "--fix uses dataset and project-aware output renderers"
+else
+  log_fail "--fix uses dataset and project-aware output renderers" "$domain_fix_output"
+fi
+
+empty_contract_indexes="$tmpdir/empty-contract-indexes"
+mkdir "$empty_contract_indexes"
+cp -R "$GOLDEN/." "$empty_contract_indexes/"
+rm -f "$empty_contract_indexes/output/_index.md" \
+  "$empty_contract_indexes/output/sample-output.md" \
+  "$empty_contract_indexes/datasets/_index.md"
+rm -rf "$empty_contract_indexes/datasets/bitcointalk-temporal-graph"
+sed -i.bak \
+  's|  - output/sample-output.md|  - wiki/references/sample-reference.md|' \
+  "$empty_contract_indexes/inventory/candidates/bitcointalk-archive.md"
+sed -i.bak \
+  's|\[Sample output\](../../output/sample-output.md)|[Sample reference](../../wiki/references/sample-reference.md)|' \
+  "$empty_contract_indexes/inventory/candidates/bitcointalk-archive.md"
+rm -f "$empty_contract_indexes/inventory/candidates/bitcointalk-archive.md.bak"
+set +e
+empty_contract_output="$("$CLI" lint --fix "$empty_contract_indexes" 2>&1)"
+empty_contract_rc=$?
+set -e
+if [ "$empty_contract_rc" -eq 0 ] \
+  && grep -q '^# Dataset Registry Index$' "$empty_contract_indexes/datasets/_index.md" \
+  && grep -q '| Dataset | Status | Storage | Formats | Size | Records | Updated |' "$empty_contract_indexes/datasets/_index.md" \
+  && grep -q '^# Output Artifacts$' "$empty_contract_indexes/output/_index.md" \
+  && grep -q '| Output | Type | Date |' "$empty_contract_indexes/output/_index.md" \
+  && ! grep -q 'Generated by local llm-wiki lint' "$empty_contract_indexes/datasets/_index.md" \
+  && ! grep -q 'Generated by local llm-wiki lint' "$empty_contract_indexes/output/_index.md"; then
+  log_pass "--fix creates empty root indexes with their declared renderers"
+else
+  log_fail "--fix creates empty root indexes with their declared renderers" "$empty_contract_output"
+fi
+
+readme_root="$tmpdir/readme-root"
+mkdir "$readme_root"
+cp -R "$GOLDEN/." "$readme_root/"
+printf '# Wiki README\n' > "$readme_root/README.md"
+set +e
+readme_output="$("$CLI" lint --fix "$readme_root" 2>&1)"
+readme_rc=$?
+set -e
+if [ "$readme_rc" -eq 0 ] \
+  && [ -f "$readme_root/README.md" ] \
+  && [ ! -e "$readme_root/inbox/.unknown/README.md" ]; then
+  log_pass "--fix preserves README.md at any wiki root"
+else
+  log_fail "--fix preserves README.md at any wiki root" "$readme_output"
+fi
+
+git_root="$tmpdir/git-root"
+mkdir "$git_root"
+cp -R "$GOLDEN/." "$git_root/"
+mkdir "$git_root/.git" "$git_root/.github"
+for file in AGENTS.md CLAUDE.md CHANGELOG.md CODE_OF_CONDUCT.md \
+  CONTRIBUTING.md SECURITY.md LICENSE LICENSE.md .gitignore .gitattributes \
+  .gitmodules; do
+  printf '# project metadata\n' > "$git_root/$file"
+done
+set +e
+git_root_output="$("$CLI" lint --fix "$git_root" 2>&1)"
+git_root_rc=$?
+set -e
+if [ "$git_root_rc" -eq 0 ] \
+  && grep -q "Result: PASS" <<<"$git_root_output" \
+  && [ -d "$git_root/.git" ] \
+  && [ -d "$git_root/.github" ] \
+  && [ -f "$git_root/AGENTS.md" ] \
+  && [ -f "$git_root/.gitignore" ] \
+  && [ ! -d "$git_root/inbox/.unknown" ]; then
+  log_pass "--fix preserves conventional metadata at a Git-backed wiki root"
+else
+  log_fail "--fix preserves conventional metadata at a Git-backed wiki root" "$git_root_output"
+fi
+
+worktree_root="$tmpdir/worktree-root"
+mkdir "$worktree_root"
+cp -R "$GOLDEN/." "$worktree_root/"
+printf 'gitdir: ../repo/.git/worktrees/wiki\n' > "$worktree_root/.git"
+printf '# Agent instructions\n' > "$worktree_root/AGENTS.md"
+set +e
+worktree_output="$("$CLI" lint --fix "$worktree_root" 2>&1)"
+worktree_rc=$?
+set -e
+if [ "$worktree_rc" -eq 0 ] \
+  && [ -f "$worktree_root/.git" ] \
+  && [ -f "$worktree_root/AGENTS.md" ] \
+  && [ ! -d "$worktree_root/inbox/.unknown" ]; then
+  log_pass "--fix recognizes a worktree .git file as a Git root"
+else
+  log_fail "--fix recognizes a worktree .git file as a Git root" "$worktree_output"
+fi
 
 expect_failure_contains \
   "missing-index fixture fails local lint" \
@@ -60,9 +283,6 @@ expect_failure_contains \
   "bad-frontmatter fixture fails local lint" \
   "Invalid type" \
   "$CLI" lint "$SCRIPT_DIR/fixtures/defects/bad-frontmatter"
-
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
 
 ideas_wiki="$tmpdir/ideas-wiki"
 mkdir "$ideas_wiki"
@@ -101,6 +321,12 @@ sources:
 ## Original Seed
 
 Build a private local search tool.
+EOF
+cat >> "$ideas_wiki/inventory/_index.md" <<'EOF'
+
+- [Ideas](ideas/_index.md)
+
+| [local-search.md](ideas/local-search.md) | idea | active | p1 | Approve or reject the shaped brief. | 2026-01-03 |
 EOF
 
 expect_success \
@@ -155,6 +381,8 @@ if [ "$schema_apply_rc" -eq 0 ] \
   && grep -q "Created advisory topic guide" <<<"$schema_apply_output" \
   && [ -f "$schema_migrate/schema.md" ] \
   && grep -q "schema_state: advisory" "$schema_migrate/schema.md" \
+  && grep -q "^## Compile Guidance$" "$schema_migrate/schema.md" \
+  && grep -q "does not exempt raw sources from C6 coverage" "$schema_migrate/schema.md" \
   && "$CLI" schema status "$schema_migrate" | grep -q "State: advisory"; then
   log_pass "schema adopt creates advisory schema.md"
 else
@@ -407,6 +635,82 @@ echo '{}' > "$hub_scope/.sessions/state/codex/example.json"
 expect_success \
   "hub lint allows operational .sessions layer" \
   "$CLI" lint "$hub_scope"
+
+registry_portability="$tmpdir/registry-portability"
+external_registry_wiki="$tmpdir/external-registry-wiki"
+missing_registry_wiki="$tmpdir/missing-registry-wiki"
+mkdir -p "$registry_portability/topics/portable-topic" "$external_registry_wiki"
+cp -R "$GOLDEN/." "$registry_portability/topics/portable-topic/"
+cp -R "$GOLDEN/." "$external_registry_wiki/"
+cat > "$registry_portability/_index.md" <<'EOF'
+# Hub Index
+EOF
+cat > "$registry_portability/log.md" <<'EOF'
+# Hub Log
+EOF
+cat > "$registry_portability/wikis.json" <<JSON
+{
+  "default": "$registry_portability",
+  "wikis": {
+    "hub": { "path": "$registry_portability", "description": "Hub" },
+    "portable-topic": {
+      "path": "$registry_portability/topics/portable-topic",
+      "description": "Portable topic"
+    },
+    "external-existing": {
+      "path": "$external_registry_wiki",
+      "description": "External existing wiki"
+    },
+    "external-missing": {
+      "path": "$missing_registry_wiki",
+      "description": "External missing wiki"
+    }
+  },
+  "local_wikis": []
+}
+JSON
+set +e
+registry_report="$("$CLI" lint "$registry_portability" --json 2>&1)"
+registry_report_rc=$?
+set -e
+if [ "$registry_report_rc" -ne 0 ] \
+  && python3 -c '
+import json, sys
+report = json.load(sys.stdin)
+messages = "\n".join(item["message"] for item in report["issues"])
+assert report["counts"] == {"critical": 0, "info": 1, "suggestion": 3, "warning": 1}
+assert "default should use the portable <HUB> token" in messages
+assert "Hub registry entry should use portable path <HUB>" in messages
+assert "Hub-owned wiki path should be portable: use topics/portable-topic" in messages
+assert "external local absolute path that exists" in messages
+assert "external local absolute path that does not exist" in messages
+' <<<"$registry_report"; then
+  log_pass "hub lint reports portable and external registry paths distinctly"
+else
+  log_fail "hub lint reports portable and external registry paths distinctly" "$registry_report"
+fi
+
+set +e
+registry_fix_report="$("$CLI" lint "$registry_portability" --fix --json 2>&1)"
+registry_fix_rc=$?
+set -e
+if [ "$registry_fix_rc" -ne 0 ] \
+  && python3 - "$registry_portability/wikis.json" "$external_registry_wiki" "$missing_registry_wiki" <<'PY'
+import json
+import sys
+
+registry = json.load(open(sys.argv[1], encoding="utf-8"))
+assert registry["default"] == "<HUB>"
+assert registry["wikis"]["hub"]["path"] == "<HUB>"
+assert registry["wikis"]["portable-topic"]["path"] == "topics/portable-topic"
+assert registry["wikis"]["external-existing"]["path"] == sys.argv[2]
+assert registry["wikis"]["external-missing"]["path"] == sys.argv[3]
+PY
+then
+  log_pass "--fix rewrites only hub-owned registry paths"
+else
+  log_fail "--fix rewrites only hub-owned registry paths" "$registry_fix_report"
+fi
 
 portable_home="$tmpdir/portable-home"
 portable_hub="$portable_home/Library/Mobile Documents/com~apple~CloudDocs/wiki"

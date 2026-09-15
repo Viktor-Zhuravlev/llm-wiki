@@ -63,6 +63,11 @@ There is no `/wiki:migrate` command and there should never be one. Lint rules **
 - [ ] Hub `topics/.archive/`, when present, contains only archived topic
   directories. Archived topic roots still have their own `_index.md`, but
   normal topic lint skips them unless explicitly included.
+- [ ] Optional hub `.skills/`, when present, has `_index.md`, schema-v1
+  `registry.json`, and valid instruction-only specialist packages. Package
+  names/frontmatter match; required method sections exist; allowlists reference
+  valid specialists and active topics; symlinks, executable files, scripts,
+  binaries, and undeclared package paths fail validation.
 
 ### C2: Frontmatter (Critical/Warning)
 
@@ -80,7 +85,15 @@ There is no `/wiki:migrate` command and there should never be one. Lint rules **
 
 ### C3: Index Consistency (Warning)
 
-- [ ] Every .md file in a directory appears in that directory's `_index.md` Contents table
+- [ ] Index shape is declared by directory contract, never inferred from the
+  current `_index.md` text:
+  - `raw/_index.md` and `wiki/_index.md`: category-index pointers
+  - `inventory/_index.md`: category navigation plus a nested record rollup
+  - `datasets/_index.md`: dataset manifest registry
+  - `output/_index.md`: loose output and active Project `WHY.md` listing
+  - leaf directories: direct-file tables
+- [ ] Every contract entry appears as a local markdown link in its owning
+  `_index.md`; a record rollup cannot be hidden by otherwise-valid navigation
 - [ ] No `_index.md` references a non-existent file (dead entries)
 - [ ] Statistics in master `_index.md` match actual file counts
 - [ ] "Last compiled" and "Last lint" dates are present and valid
@@ -222,10 +235,12 @@ Any file that is not in the canonical allowlist for its location is either a use
 
 | Location | Allowed items |
 |----------|--------------|
-| HUB | `wikis.json`, `_index.md`, `log.md`, `topics/` |
+| HUB | `wikis.json`, `_index.md`, `README.md`, `log.md`, `topics/`, optional `.sessions/`, optional `.skills/` |
+| `HUB/.skills/` | `_index.md`, `registry.json`, and lowercase specialist package directories |
+| `HUB/.skills/<name>/` | `SKILL.md` and optional `references/` containing Markdown only |
 | `HUB/topics/` | active topic directories plus `.archive/` |
 | `HUB/topics/.archive/` | archived topic directories |
-| Topic wiki root | `_index.md`, `config.md`, `schema.md`, `log.md`, `raw/`, `wiki/`, `inventory/`, `datasets/`, `output/`, `inbox/`, `.obsidian/`, `.librarian/`, `.audit/`, `.research-session.json`, `.thesis-session.json`, `.session-events.jsonl`, `.session-checkpoint.json` |
+| Topic wiki root | `_index.md`, `README.md`, `config.md`, `schema.md`, `log.md`, `raw/`, `wiki/`, `inventory/`, `datasets/`, `output/`, `inbox/`, `.obsidian/`, `.librarian/`, `.audit/`, `.research-session.json`, `.thesis-session.json`, `.session-events.jsonl`, `.session-checkpoint.json` |
 | `raw/` | `_index.md`, `articles/`, `papers/`, `repos/`, `notes/`, `data/` |
 | `wiki/` | `_index.md`, `concepts/`, `topics/`, `references/`, `theses/` |
 | `inventory/` | `_index.md`, `items/`, `ideas/`, `candidates/`, `entities/`, `corpora/`, `views/` |
@@ -237,6 +252,14 @@ Any file that is not in the canonical allowlist for its location is either a use
 | `datasets/<slug>/` | `_index.md`, `MANIFEST.md`, `samples/`, `profiles/`, `queries/` |
 | `datasets/<slug>/{samples,profiles,queries}/` | `_index.md` + `*.md` notes |
 | `inbox/` | `.processed/`, `.unknown/`, user-dropped files |
+
+When the hub or topic wiki root is itself a Git repository root (a `.git`
+directory or worktree `.git` file exists there), also allow the repository's
+`.git`, optional `.github/`, `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`,
+`CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `LICENSE.md`,
+`.gitignore`, `.gitattributes`, and `.gitmodules`. Do not apply this exception
+merely because some parent directory is a repository: project metadata does not
+belong inside an ordinary nested `.wiki/`.
 
 **Checks**:
 
@@ -461,9 +484,9 @@ Validates the hub-level archive lifecycle described in `archive.md`.
 
 | Issue | Auto-Fix Action |
 |-------|----------------|
-| Missing `_index.md` | Generate from directory contents (read frontmatter of each file) |
-| File not in index | Regenerate the affected directory index from current directory contents and frontmatter |
-| Dead index entry | Regenerate the affected directory index, dropping dead links/rows |
+| Missing `_index.md` | Generate using its declared directory contract and renderer |
+| File not in index | Regenerate with the declared contract; preserve root navigation and domain-specific tables |
+| Dead index entry | Regenerate with the declared contract, dropping only dead contract rows/links |
 | Statistics mismatch | Recalculate from actual file counts |
 | Raw sources with no compiled reference | Create/update `wiki/references/uncompiled-source-coverage.md` as an explicit synthesis backlog |
 | Missing bidirectional link | Add "See Also" entry to the article missing the backlink |

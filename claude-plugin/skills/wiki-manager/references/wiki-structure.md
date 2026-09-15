@@ -4,13 +4,21 @@
 
 ## Hub (HUB/)
 
-The hub is lightweight — it has NO content directories. It only tracks topic wikis.
+The hub is lightweight — it has NO content directories. It tracks topic wikis
+and may hold user-owned local operational configuration.
 
 ```
 HUB/                               # resolved from ~/.config/llm-wiki/config.json
 ├── wikis.json                     # Registry of all topic wikis
 ├── _index.md                      # Lists topic wikis with stats
 ├── log.md                         # Global activity log
+├── .sessions/                     # Optional harness-session operational memory
+├── .skills/                       # Optional personal specialist method library
+│   ├── _index.md                  # Derived specialist catalog
+│   ├── registry.json              # Per-active-topic specialist allowlists
+│   └── <name>/
+│       ├── SKILL.md               # Agent Skills-compatible review method
+│       └── references/            # Optional Markdown references only
 └── topics/                        # Each topic is a full wiki
     ├── dementia/
     ├── quantum-computing/
@@ -18,6 +26,12 @@ HUB/                               # resolved from ~/.config/llm-wiki/config.jso
     │   └── old-topic/
     └── ...
 ```
+
+The hub still has no `raw/`, `wiki/`, `inventory/`, `datasets/`, `output/`,
+`inbox/`, `config.md`, `schema.md`, or `.obsidian/`. `.skills/` contains
+reusable instructions and allowlists, not evidence or topic content. Its
+packages are instruction-only: `SKILL.md` plus optional Markdown under
+`references/`. See [specialists.md](specialists.md).
 
 ## Topic Sub-Wiki (HUB/topics/<name>/)
 
@@ -229,7 +243,7 @@ Additionally includes:
 
 ## log.md Format
 
-Append-only chronological activity log. Every wiki operation appends an entry. Never edit or delete existing entries. **Always open for append, never read-modify-write** — this makes concurrent writes safe (lines from multiple sessions interleave without corruption). Format is grep-friendly:
+Append-only chronological activity log. Every wiki operation appends an entry. Never edit or delete existing entries during normal workflows. The sole exception is an explicit user-directed privacy retraction with `scripts/llm-wiki retract --remove-from-logs`, which atomically removes complete matching entries while preserving unrelated history. **Otherwise always open for append, never read-modify-write** — this makes concurrent writes safe (lines from multiple sessions interleave without corruption). Format is grep-friendly:
 
 ```markdown
 # Wiki Activity Log
@@ -247,7 +261,7 @@ Append-only chronological activity log. Every wiki operation appends an entry. N
 
 Each entry: `## [YYYY-MM-DD] operation | Description`
 
-Operations: `init`, `ingest`, `ingest-collection`, `compile`, `query`, `lint`, `research`, `output`, `refresh`, `librarian`, `audit`, `plan`, `idea`, `project`, `inventory`, `dataset`, `schema`, `archive`, `ll`, `assess`
+Operations: `init`, `ingest`, `ingest-collection`, `compile`, `query`, `lint`, `research`, `output`, `refresh`, `librarian`, `audit`, `plan`, `idea`, `project`, `inventory`, `dataset`, `schema`, `archive`, `retract`, `ll`, `assess`
 
 Useful for: `grep "^## \[" log.md | tail -10` to see recent activity.
 
@@ -278,8 +292,20 @@ freshness_threshold: 70
 guide, not a database schema: it captures the local vocabulary that helps
 agents avoid taxonomy drift, including entity types, relationship verbs, article
 subtypes, source conventions, inventory/dataset boundaries, and adoption notes.
-It must not redefine global llm-wiki primitives such as raw source folders,
-article categories, inventory kinds, or required frontmatter.
+
+Every runtime's compilation workflow reads a topic's `schema.md` in full before
+planning new or updated articles. Its structural guidance can shape cardinality
+(for example, consolidate several sources about one mechanism), article
+boundaries, topic scope, and named concepts that should remain separate. This
+is an operational planning input, not a second lint schema.
+
+The guide cannot redefine deeper global primitives: the `category` vocabulary
+stays `concept`/`topic`/`reference`, the physical layout stays `raw/` →
+`wiki/concepts|topics|references/`, and the required-frontmatter set stays
+fixed. Additional topic fields remain optional to deterministic tooling.
+Likewise, prose telling compilation to exclude a raw source does not satisfy C6
+coverage: the source remains visible in the uncompiled-source backlog until an
+article cites it or the user explicitly re-ingests it into the correct topic.
 
 ```markdown
 ---
@@ -316,6 +342,12 @@ summary: "Human-owned topic guide for local vocabulary and conventions."
 ## Source Conventions
 
 [Topic-specific evidence and boundary rules]
+
+## Compile Guidance (optional)
+
+[Topic-specific cardinality, article-boundary, scope, and keep-separate rules.
+These rules shape compilation planning but do not redefine global categories,
+frontmatter, or raw-source coverage.]
 ```
 
 Adoption states:
@@ -324,8 +356,8 @@ Adoption states:
 |-------|---------|----------|
 | `missing` | Older wiki without `schema.md` | Valid; show non-blocking adoption nudge |
 | `proposed` | Librarian wrote `output/schema-proposal-*.md` | Human reviews and edits before adoption |
-| `advisory` | `schema.md` exists | Report mismatches as suggestions |
-| `strict` | Explicit opt-in in `schema.md` | Warn on violations; never auto-rewrite content |
+| `advisory` | `schema.md` exists | Follow by default; explain deliberate compile deviations |
+| `strict` | Explicit opt-in in `schema.md` | Confirm planned deviations before writing; never auto-rewrite content |
 
 Topic-guide helpers:
 
