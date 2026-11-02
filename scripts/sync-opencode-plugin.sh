@@ -30,27 +30,15 @@ if [ ! -f "$LOCAL_HELPER" ]; then
   exit 1
 fi
 
-if ! command -v rsync >/dev/null 2>&1; then
-  echo "Missing required tool: rsync" >&2
-  exit 1
-fi
-
 mkdir -p "$ROOT/claude-plugin/bin" "$TARGET_PLUGIN/bin"
 cp "$LOCAL_HELPER" "$ROOT/claude-plugin/bin/llm-wiki"
 cp "$LOCAL_HELPER" "$TARGET_PLUGIN/bin/llm-wiki"
 chmod 0755 "$ROOT/claude-plugin/bin/llm-wiki" "$TARGET_PLUGIN/bin/llm-wiki"
 
 mkdir -p "$TARGET_PLUGIN/skills"
-# references/ is a symlink into the Claude source — exclude from rsync so it's
-# preserved, and recreate it idempotently below.
-rsync -a --delete \
-  --exclude='references/' \
-  --exclude='references' \
-  "$SOURCE_SKILL/" "$TARGET_SKILL/"
-
-# Recreate the references symlink (idempotent — works on fresh checkout too).
-rm -rf "$TARGET_SKILL/references"
-ln -s "../../../../claude-plugin/skills/wiki-manager/references" "$TARGET_SKILL/references"
+rm -rf "$TARGET_SKILL"
+mkdir -p "$TARGET_SKILL"
+cp -R "$SOURCE_SKILL/." "$TARGET_SKILL/"
 
 # Best-effort OpenCode query preset. It is instruction-only and shares the
 # runtime-neutral query contract, but no provider-specific live model gate is
@@ -75,7 +63,7 @@ from pathlib import Path
 target_skill = Path(sys.argv[1])
 
 skill_path = target_skill / "SKILL.md"
-text = skill_path.read_text()
+text = skill_path.read_text(encoding="utf-8")
 
 frontmatter = """---
 name: wiki-manager
@@ -92,7 +80,8 @@ description: >
   archive wiki, archive topic, restore wiki, private adapter, adapter registry, skill-factory,
   checkpoints,
   personal specialist, specialist skill, specialist reviewer, expert lens,
-  adapter route, adapter doctor, adapter run, edit an external resource, session capture, capture context, rehydrate,
+  adapter route, adapter doctor, adapter run, read, review, or edit a hosted external resource such as a document,
+  session capture, capture context, rehydrate,
   resume from session, lessons learned, implementation plan, or uses
   wiki-related shorthand in a repo with .wiki/, ~/wiki/, or a
   configured hub path.
@@ -149,11 +138,12 @@ for old, new in replacements:
         raise SystemExit(f"Expected text not found in {skill_path}: {old[:80]!r}")
     text = text.replace(old, new)
 
-skill_path.write_text(text)
+with skill_path.open("w", encoding="utf-8", newline="\n") as handle:
+    handle.write(text)
 
-# references/ is a symlink to claude-plugin/skills/wiki-manager/references and
-# is shared verbatim — no per-file replacements needed. Source references use
-# runtime-neutral wording ("the agent") so they read correctly under all runtimes.
+# references/ is copied verbatim so raw GitHub URLs and standalone OpenCode
+# packages can resolve relative links. Source references use runtime-neutral
+# wording ("the agent") so they read correctly under all runtimes.
 PY
 
 echo "Synced OpenCode plugin skill from Claude source."

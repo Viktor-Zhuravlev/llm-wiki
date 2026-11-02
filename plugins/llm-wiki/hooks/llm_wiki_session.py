@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "rehydrate": {
         "session_start": True,
-        "user_prompt": True,
+        "user_prompt": False,
         "strict": False,
     },
     "raw_transcripts": False,
@@ -79,7 +80,7 @@ BALANCED_CONFIG = {
     },
     "rehydrate": {
         "session_start": True,
-        "user_prompt": True,
+        "user_prompt": False,
         "strict": False,
     },
     "raw_transcripts": False,
@@ -149,11 +150,22 @@ def today() -> str:
     return dt.date.today().isoformat()
 
 
+def home_directory() -> Path:
+    """Return the home directory, honouring HOME on every platform.
+
+    Path.home() consults USERPROFILE on Windows and ignores HOME, so a hub
+    configured as ~/... resolved against a different profile than the caller
+    asked for. Git honours HOME on Windows; match that.
+    """
+    home = os.environ.get("HOME")
+    return Path(home) if home else Path.home()
+
+
 def expand_leading_tilde(value: str) -> Path:
     if value == "~":
-        return Path.home()
+        return home_directory()
     if value.startswith("~/"):
-        return Path.home() / value[2:]
+        return home_directory() / value[2:]
     return Path(value)
 
 
@@ -162,7 +174,7 @@ def resolve_hub(args: argparse.Namespace) -> Path:
         return Path.cwd() / ".wiki"
     if getattr(args, "hub", None):
         return expand_leading_tilde(str(args.hub))
-    config = Path.home() / ".config" / "llm-wiki" / "config.json"
+    config = home_directory() / ".config" / "llm-wiki" / "config.json"
     if config.exists():
         try:
             data = json.loads(config.read_text(encoding="utf-8"))
@@ -171,7 +183,7 @@ def resolve_hub(args: argparse.Namespace) -> Path:
         hub_path = data.get("hub_path") or data.get("resolved_path")
         if hub_path:
             return expand_leading_tilde(str(hub_path))
-    return Path.home() / "wiki"
+    return home_directory() / "wiki"
 
 
 def sessions_dir(hub: Path) -> Path:
@@ -219,7 +231,19 @@ def atomic_write(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        # POSIX rename always succeeds; Windows refuses to replace a file that
+        # another process currently has open, which concurrent hooks reading the
+        # same state file do constantly. The window is short, so retry briefly
+        # rather than losing the write - and still raise if it never clears.
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
     finally:
         if tmp.exists():
             try:
@@ -231,7 +255,23 @@ def atomic_write(path: Path, text: str) -> None:
 def read_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
-    text = path.read_text(encoding="utf-8")
+    # Windows also refuses to open a file while it is being replaced, so a reader
+    # that meets a writer sees a sharing violation rather than either version of
+    # the file. The window is very short; retry briefly before giving up.
+    deadline = time.monotonic() + 1.0
+    while True:
+        try:
+            text = path.read_text(encoding="utf-8")
+            break
+        except FileNotFoundError:
+            return default
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                # A persistent sharing or permission failure is not equivalent
+                # to an absent/corrupt state file. Fail closed so callers do
+                # not rebuild and overwrite durable state from an empty default.
+                raise
+            time.sleep(0.005)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -244,6 +284,60 @@ def read_json(path: Path, default: Any) -> Any:
             return obj
         except json.JSONDecodeError:
             return default
+
+
+def read_stdin_text() -> str:
+    """Read hook input without assuming PowerShell emitted UTF-8.
+
+    Windows PowerShell can pipe UTF-16 text, while newer PowerShell and Codex
+    normally use UTF-8. Honour byte-order marks first and otherwise prefer
+    UTF-8 so hook payloads are decoded consistently across runtimes.
+    """
+    data = sys.stdin.buffer.read()
+    if not data:
+        return ""
+
+    encodings: list[str] = []
+    if data.startswith(b"\xef\xbb\xbf"):
+        encodings.append("utf-8-sig")
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    encodings.extend(["utf-8", sys.getfilesystemencoding() or "utf-8"])
+
+    seen: set[str] = set()
+    for encoding in encodings:
+        if encoding in seen:
+            continue
+        seen.add(encoding)
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def hook_debug(message: str) -> None:
+    if os.environ.get("LLM_WIKI_HOOK_DEBUG"):
+        print(message, file=sys.stderr)
+
+
+def parse_hook_payload(args: argparse.Namespace) -> dict[str, Any]:
+    raw = read_stdin_text().lstrip("\ufeff")
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if getattr(args, "strict_json", False):
+            raise SystemExit(f"invalid hook JSON input: {exc}") from exc
+        hook_debug(f"llm-wiki hook skipped invalid JSON input: {exc}")
+        raise HookSkip()
+    if not isinstance(parsed, dict):
+        if getattr(args, "strict_json", False):
+            raise SystemExit("hook JSON input must be an object")
+        hook_debug("llm-wiki hook skipped non-object JSON input")
+        raise HookSkip()
+    return parsed
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -784,11 +878,7 @@ def should_write_digest(state: dict[str, Any], event: dict[str, Any], config: di
 
 def yaml_string(value: Any) -> str:
     text = "" if value is None else str(value)
-    if text == "":
-        return '""'
-    if re.fullmatch(r"[A-Za-z0-9_.:/@+ -]+", text):
-        return json.dumps(text)
-    return json.dumps(text)
+    return json.dumps(text, ensure_ascii=False)
 
 
 def yaml_list(values: list[Any]) -> str:
@@ -827,7 +917,7 @@ def frontmatter_block(state: dict[str, Any], trigger: str, digest_file: Path) ->
         "topic_candidates: []",
         f"privacy: {yaml_string(state.get('privacy') or 'redacted')}",
         f"raw_transcripts: {str(bool(state.get('raw_transcripts'))).lower()}",
-        "promoted_to: []",
+        f"promoted_to: {yaml_list(as_list(state.get('promoted_to')))}",
         f"summary: {yaml_string(summary)}",
         "---",
     ]
@@ -1044,19 +1134,8 @@ def run_hook(args: argparse.Namespace) -> int:
     config = load_config(root)
     if args.if_enabled and not config.get("enabled"):
         raise HookSkip()
+    payload = parse_hook_payload(args)
     ensure_layout(root)
-    raw = sys.stdin.read()
-    payload: dict[str, Any]
-    if raw.strip():
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"invalid hook JSON input: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise SystemExit("hook JSON input must be an object")
-        payload = parsed
-    else:
-        payload = {}
     event = normalize_event(args, payload, root)
     append_jsonl(event_queue_path(root, event), event)
     state, is_new = update_state(root, event, config)
@@ -1226,8 +1305,13 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
                 data[key.strip()] = json.loads(value)
             except json.JSONDecodeError:
                 data[key.strip()] = []
+        elif value.startswith('"') and value.endswith('"'):
+            try:
+                data[key.strip()] = json.loads(value)
+            except json.JSONDecodeError:
+                data[key.strip()] = value.strip('"')
         else:
-            data[key.strip()] = value.strip('"')
+            data[key.strip()] = value
     return data, body
 
 
@@ -1364,9 +1448,8 @@ def run_promote(args: argparse.Namespace) -> int:
 
         This note promotes a distilled session checkpoint into the `{args.topic}` topic raw layer. It intentionally promotes the digest, not the raw transcript.
 
-        {body.strip()}
         """
-    ).strip() + "\n"
+    ).strip() + "\n\n" + body.strip() + "\n"
     atomic_write(dest, promoted)
     topics = set(as_list(state.get("topics")))
     topics.add(args.topic)
@@ -1375,6 +1458,17 @@ def run_promote(args: argparse.Namespace) -> int:
     promoted_to.append(str(dest))
     state["promoted_to"] = sorted(set(str(item) for item in promoted_to))
     write_json(state_path(root, str(state["harness"]), str(state["native_session_id"])), state)
+    # Update only the frontmatter so local annotations in the digest survive.
+    frontmatter_end = digest_text.find("\n---\n", 4)
+    if digest_text.startswith("---\n") and frontmatter_end != -1:
+        header = digest_text[:frontmatter_end]
+        promoted_line = f"promoted_to: {yaml_list(state['promoted_to'])}"
+        header, replacements = re.subn(
+            r"^promoted_to:.*$", lambda _: promoted_line, header, count=1, flags=re.MULTILINE
+        )
+        if not replacements:
+            header += "\n" + promoted_line
+        atomic_write(digest_file, header + digest_text[frontmatter_end:])
     rebuild_indexes(root)
     append_topic_log(topic_root, f"promoted session digest {state.get('llm_wiki_session_id')} → raw/notes/{filename}")
     print(str(dest))
@@ -1529,38 +1623,41 @@ def run_feedback_promote(args: argparse.Namespace) -> int:
         # Feedback Candidate Promotion: {candidate.get('id')}
 
         This note promotes a curated user-feedback candidate from `.sessions/feedback/`. It is a distilled operational lesson, not a raw transcript.
-
-        ## Distilled Lesson
-
-        {candidate.get('distilled_lesson')}
-
-        ## Redacted User Feedback Preview
-
-        > {candidate.get('text_preview')}
-
-        ## Metadata
-
-        {markdown_table([
-            ('Feedback type', candidate.get('feedback_type')),
-            ('Confidence', candidate.get('confidence')),
-            ('Strength', candidate.get('strength')),
-            ('Scope hint', candidate.get('scope_hint')),
-            ('Promotion recommendation', candidate.get('promotion_recommendation')),
-            ('Session', candidate.get('llm_wiki_session_id')),
-            ('Harness', candidate.get('harness')),
-            ('CWD', candidate.get('cwd')),
-            ('Git remote', candidate.get('git_remote')),
-            ('Git branch', candidate.get('git_branch')),
-            ('Captured at', candidate.get('ts')),
-        ])}
-
+        """
+    ).strip()
+    preview = textwrap.indent(str(candidate.get("text_preview") or "").strip(), "> ", lambda line: True).rstrip()
+    metadata = markdown_table([
+        ('Feedback type', candidate.get('feedback_type')),
+        ('Confidence', candidate.get('confidence')),
+        ('Strength', candidate.get('strength')),
+        ('Scope hint', candidate.get('scope_hint')),
+        ('Promotion recommendation', candidate.get('promotion_recommendation')),
+        ('Session', candidate.get('llm_wiki_session_id')),
+        ('Harness', candidate.get('harness')),
+        ('CWD', candidate.get('cwd')),
+        ('Git remote', candidate.get('git_remote')),
+        ('Git branch', candidate.get('git_branch')),
+        ('Captured at', candidate.get('ts')),
+    ])
+    guidance = textwrap.dedent(
+        """
         ## Usage Guidance
 
         - Use corrections and preferences as candidates for future `AGENTS.md`, skill, or workflow rule updates.
         - Treat approval/decision candidates as validation of the immediate prior context unless corroborated by session digests.
         - Do not infer broader factual claims from this feedback alone.
         """
-    ).strip() + "\n"
+    ).strip()
+    promoted = "\n\n".join([
+        promoted,
+        "## Distilled Lesson",
+        str(candidate.get("distilled_lesson") or "").strip(),
+        "## Redacted User Feedback Preview",
+        preview,
+        "## Metadata",
+        metadata,
+        guidance,
+    ]) + "\n"
     atomic_write(dest, promoted)
     status = read_json(feedback_status_path(root), {"promoted": {}})
     if not isinstance(status, dict):
@@ -1623,6 +1720,7 @@ def build_parser() -> argparse.ArgumentParser:
     hook.add_argument("--trigger", help="Override capture trigger name.")
     hook.add_argument("--if-enabled", action="store_true", help="Honor .sessions/config.json enabled=false; default is enabled when no config exists.")
     hook.add_argument("--max-event-bytes", type=int, default=MAX_EVENT_PREVIEW_CHARS)
+    hook.add_argument("--strict-json", action="store_true", help="Fail hook calls on invalid JSON instead of skipping them.")
     hook.set_defaults(func=run_hook)
 
     capture = sub.add_parser("capture", help="Force a manual session digest checkpoint.")
@@ -1707,7 +1805,7 @@ def main(argv: list[str] | None = None) -> int:
     except HookSkip:
         return 0
     except BrokenPipeError:
-        return 1
+        return 0
 
 
 if __name__ == "__main__":

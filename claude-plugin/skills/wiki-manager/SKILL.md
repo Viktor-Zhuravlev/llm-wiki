@@ -10,8 +10,9 @@ description: >
   checkpoints,
   private adapters, adapter routing, explicit wiki skill-factory requests,
   personal specialist skills, expert review,
-  specialist selection, provenance, external resource actions, or questions in a directory
-  with .wiki/ or a configured hub.
+  specialist selection, provenance, external resource actions (including
+  requests to read, review, or edit hosted documents), or questions in a
+  directory with .wiki/ or a configured hub.
 tools:
   - Read
   - Write
@@ -118,8 +119,9 @@ preserve disagreement, and record its version/hash. See
 ## Adapter Routing
 
 For an action plus URL, run `adapter route --intent <effect> --resource <url>
---json` before ingestion. On a match, read its adapter-owned guide; provider
-steps live there. A URL alone is not write authorization. See
+--json` before ingestion or generic tool advice, even when the user did not say
+"wiki." On a match, read its adapter-owned guide; provider steps live there. A
+URL alone is not write authorization. See
 [references/adapters.md](references/adapters.md).
 
 Explicit `wiki skill-factory <request>` selects the registered named adapter;
@@ -151,7 +153,7 @@ query, use the Audit workflow instead of treating it as plain Q&A.
 
 ### Ingestion
 See [references/ingestion.md](references/ingestion.md).
-Flow: Source (URL/file/text/tweet/inbox) → fetch/read → extract metadata → write to `raw/{type}/` → update indexes → suggest compile if many uncompiled.
+Flow: Source (URL/file/text/tweet/inbox) → fetch/read → extract metadata → write to `raw/{type}/` or an existing topic-defined namespace below that type → update every containing index → suggest compile if many uncompiled. Nested folders never create a new raw `type`.
 
 ### Collection Ingestion
 See [references/ingestion.md](references/ingestion.md) § Collection Ingestion.
@@ -164,7 +166,10 @@ write roots → verify the manifest hash and `describe` handshake → execute a 
 JSON request through the bundled deterministic CLI → verify artifact paths and
 hashes → leave all outputs external → optionally review only `wiki-safe`
 candidates and promote the smallest useful evidence through normal wiki writes.
-Never clone, install, update, publish, or auto-promote an adapter.
+If the guide offers an agent-started interactive authorization helper, launch
+it yourself and present only its short local handoff link rather than a long
+terminal command or provider URL. Never clone, install, update, publish, or
+auto-promote an adapter.
 
 ### Personal Specialist Skills
 See [references/specialists.md](references/specialists.md).
@@ -244,6 +249,14 @@ must not rewrite `schema.md` without explicit user acceptance.
 Librarian is the article-health advisor; it does not replace lint's structural
 checks or audit's broader trust review.
 
+### Refresh
+See [references/refresh.md](references/refresh.md).
+Flow: Select due articles → compare current upstream material with immutable raw
+revisions → present source-by-source decisions → create a new raw revision and
+bounded article update only after approval. `verified` is written only after an
+explicit human confirmation; due scans, compilation, and fetches never advance
+it.
+
 ### Audit
 See [references/audit.md](references/audit.md).
 Flow: Run or reuse the librarian pass → inspect artifact dependency chains across `output/`, `wiki/`, and `raw/` → escalate with fresh source checks and targeted research until trust verdicts converge → write `.audit/REPORT.md`.
@@ -314,10 +327,13 @@ Every wiki operation appends to `log.md` in the wiki root. Format: `## [YYYY-MM-
 
 ## Confidence Scoring
 
-Wiki articles include a `confidence` field in frontmatter: `high`, `medium`, or `low`.
+Wiki articles use a five-point `confidence` field in frontmatter: `high`,
+`medium-high`, `medium`, `medium-low`, or `low`.
 
 - **high**: Multiple peer-reviewed sources agree, well-established knowledge
+- **medium-high**: Strong evidence with a minor gap in replication, independence, or scope
 - **medium**: Single source, or sources partially agree, or recent findings not yet replicated
+- **medium-low**: Limited or conflicting evidence with some credible support
 - **low**: Anecdotal, single non-peer-reviewed source, or sources disagree
 
 When answering queries, note confidence levels. When linting, flag `low` confidence articles for review.

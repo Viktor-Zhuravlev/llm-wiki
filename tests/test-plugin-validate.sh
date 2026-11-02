@@ -9,7 +9,7 @@ PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
 PASS=0
 FAIL=0
 TOTAL=0
-REFERENCE_NAMES="adapters archive audit checkpoints command-prelude compilation datasets feedback hub-resolution ideas indexing ingestion inventory librarian linting portfolio projects query-lite research-infrastructure sessions specialists wiki-structure"
+REFERENCE_NAMES="adapters archive audit checkpoints command-prelude compilation datasets feedback hub-resolution ideas indexing ingestion inventory librarian linting portfolio projects query-lite refresh research-infrastructure sessions specialists wiki-structure"
 
 log_pass() { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); printf "  \033[32mPASS\033[0m: %s\n" "$1"; }
 log_fail() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); printf "  \033[31mFAIL\033[0m: %s — %s\n" "$1" "$2"; }
@@ -238,6 +238,7 @@ echo ""
 echo "--- Codex bundled hooks ---"
 CODEX_HOOKS="$CODEX_PLUGIN/hooks/hooks.json"
 CODEX_SESSION_HELPER="$CODEX_PLUGIN/hooks/llm_wiki_session.py"
+CODEX_HOOK_WRAPPER="$CODEX_PLUGIN/hooks/llm-wiki-hook.cmd"
 if [ -f "$CODEX_HOOKS" ]; then
   log_pass "Codex hooks/hooks.json exists"
   if python3 -c "import json; json.load(open('$CODEX_HOOKS'))" 2>/dev/null; then
@@ -248,10 +249,33 @@ if [ -f "$CODEX_HOOKS" ]; then
 else
   log_fail "Codex hooks/hooks.json missing" "missing file"
 fi
+if python3 - "$CODEX_HOOKS" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+hooks = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["hooks"]
+for event, entries in hooks.items():
+    hook = entries[0]["hooks"][0]
+    assert f"--event-name {event}" in hook["command"], event
+    assert f"--event-name {event}" in hook["commandWindows"], event
+    assert "llm-wiki-hook.cmd" in hook["commandWindows"], event
+PY
+then
+  log_pass "Codex hooks include Windows command overrides and explicit event names"
+else
+  log_fail "Codex Windows hook commands invalid" "missing commandWindows, wrapper, or --event-name"
+fi
 if [ -x "$CODEX_SESSION_HELPER" ]; then
   log_pass "Codex session hook helper exists and is executable"
 else
   log_fail "Codex session hook helper missing" "expected executable hooks/llm_wiki_session.py"
+fi
+if [ -f "$CODEX_HOOK_WRAPPER" ] \
+  && grep -q 'exit /b !ERRORLEVEL!' "$CODEX_HOOK_WRAPPER"; then
+  log_pass "Codex Windows hook wrapper exists and propagates helper failures"
+else
+  log_fail "Codex Windows hook wrapper missing or unsafe" "expected hooks/llm-wiki-hook.cmd"
 fi
 
 # Codex marketplace entry
@@ -352,26 +376,21 @@ OPENCODE_PLUGIN="$PROJECT_ROOT/plugins/llm-wiki-opencode"
 OPENCODE_SKILL="$OPENCODE_PLUGIN/skills/wiki-manager"
 OPENCODE_QUERY_SKILL="$OPENCODE_PLUGIN/skills/wiki-query"
 
-# References symlink
+# Copied references
 echo ""
-echo "--- OpenCode references symlink ---"
-OC_REFS_LINK="$OPENCODE_SKILL/references"
-if [ -L "$OC_REFS_LINK" ]; then
-  log_pass "OpenCode references is a symlink"
-  if [ -e "$OC_REFS_LINK" ]; then
-    log_pass "OpenCode references symlink resolves"
-    for ref in $REFERENCE_NAMES; do
-      if [ -f "$OC_REFS_LINK/${ref}.md" ]; then
-        log_pass "OpenCode references/$ref.md reachable via symlink"
-      else
-        log_fail "OpenCode references/$ref.md not reachable via symlink" "broken target"
-      fi
-    done
-  else
-    log_fail "OpenCode references symlink target does not exist" "$(readlink "$OC_REFS_LINK")"
-  fi
+echo "--- OpenCode references copy ---"
+OC_REFS="$OPENCODE_SKILL/references"
+if [ -d "$OC_REFS" ] && [ ! -L "$OC_REFS" ]; then
+  log_pass "OpenCode references directory exists"
+  for ref in $REFERENCE_NAMES; do
+    if [ -f "$OC_REFS/${ref}.md" ]; then
+      log_pass "OpenCode references/$ref.md exists"
+    else
+      log_fail "OpenCode references/$ref.md missing" "generated copy is incomplete"
+    fi
+  done
 else
-  log_fail "OpenCode references is not a symlink" "expected symlink to claude-plugin source"
+  log_fail "OpenCode references is not a copied directory" "standalone packages cannot resolve relative links"
 fi
 
 # OpenCode SKILL.md

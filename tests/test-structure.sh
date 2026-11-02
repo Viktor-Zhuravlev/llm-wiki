@@ -176,7 +176,7 @@ while IFS= read -r -d '' file; do
   bn=$(basename "$file")
   conf_val=$(grep "^confidence:" "$file" | head -1 | sed 's/confidence: *//')
   case "$conf_val" in
-    high|medium|low) log_pass "valid confidence '$conf_val' in $bn" ;;
+    high|medium-high|medium|medium-low|low) log_pass "valid confidence '$conf_val' in $bn" ;;
     *) log_fail "invalid confidence '$conf_val' in $bn" "C2 violation" ;;
   esac
 done < <(find "$GOLDEN/wiki" -name "*.md" -not -name "_index.md" -print0)
@@ -450,6 +450,12 @@ if [ -d "$DEFECTS" ]; then
       && grep -q "deleted-inventory-source.md" "$DEFECTS/dangling-source-ref/inventory/items/trx4m-ring-and-pinion.md" 2>/dev/null \
       && log_pass "dangling-source-ref: C4b defect present" \
       || log_fail "dangling-source-ref: no dangling ref" "fixture broken"
+  }
+
+  [ -d "$DEFECTS/raw-source-unresolved" ] && {
+    grep -q "source: ../../../research/nonexistent-original.pdf" "$DEFECTS/raw-source-unresolved/raw/papers/2026-01-01-sample-paper.md" 2>/dev/null \
+      && log_pass "raw-source-unresolved: C4b defect present" \
+      || log_fail "raw-source-unresolved: no unresolved raw source path" "fixture broken"
   }
 
   [ -d "$DEFECTS/retracted-marker" ] && {

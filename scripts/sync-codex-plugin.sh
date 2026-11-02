@@ -10,6 +10,7 @@ TARGET_QUERY="$TARGET_PLUGIN/skills/wiki-query"
 CLAUDE_MANIFEST="$ROOT/claude-plugin/.claude-plugin/plugin.json"
 CODEX_MANIFEST="$TARGET_PLUGIN/.codex-plugin/plugin.json"
 SESSION_HELPER="$ROOT/scripts/llm-wiki-session"
+HOOK_WRAPPER="$ROOT/scripts/llm-wiki-hook.cmd"
 LOCAL_HELPER="$ROOT/scripts/llm-wiki"
 
 if [ ! -d "$SOURCE_SKILL" ]; then
@@ -37,13 +38,13 @@ if [ ! -f "$SESSION_HELPER" ]; then
   exit 1
 fi
 
-if [ ! -f "$LOCAL_HELPER" ]; then
-  echo "Missing local helper: $LOCAL_HELPER" >&2
+if [ ! -f "$HOOK_WRAPPER" ]; then
+  echo "Missing Windows hook wrapper: $HOOK_WRAPPER" >&2
   exit 1
 fi
 
-if ! command -v rsync >/dev/null 2>&1; then
-  echo "Missing required tool: rsync" >&2
+if [ ! -f "$LOCAL_HELPER" ]; then
+  echo "Missing local helper: $LOCAL_HELPER" >&2
   exit 1
 fi
 
@@ -61,15 +62,15 @@ mkdir -p "$TARGET_PLUGIN/skills"
 # Codex-only metadata and is recreated below.
 rm -rf "$TARGET_PLUGIN/skills/wiki-manager"
 rm -rf "$TARGET_QUERY"
-rsync -a --delete \
-  --exclude='agents/' \
-  --exclude='agents' \
-  "$SOURCE_SKILL/" "$TARGET_SKILL/"
+rm -rf "$TARGET_SKILL"
+cp -R "$SOURCE_SKILL" "$TARGET_SKILL"
+rm -rf "$TARGET_SKILL/agents"
 
 mkdir -p "$TARGET_SKILL/agents"
 mkdir -p "$TARGET_PLUGIN/hooks"
 cp "$SESSION_HELPER" "$TARGET_PLUGIN/hooks/llm_wiki_session.py"
 chmod 0755 "$TARGET_PLUGIN/hooks/llm_wiki_session.py"
+cp "$HOOK_WRAPPER" "$TARGET_PLUGIN/hooks/llm-wiki-hook.cmd"
 
 cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
 {
@@ -79,7 +80,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name SessionStart --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name SessionStart --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Loading llm-wiki session context"
           }
@@ -91,7 +93,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name UserPromptSubmit --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name UserPromptSubmit --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Checking llm-wiki session context"
           }
@@ -104,7 +107,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name PostToolUse --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name PostToolUse --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Recording llm-wiki session event"
           }
@@ -117,7 +121,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name PreCompact --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name PreCompact --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Capturing llm-wiki pre-compact session context"
           }
@@ -130,7 +135,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name PostCompact --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name PostCompact --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Capturing llm-wiki post-compact session context"
           }
@@ -142,7 +148,8 @@ cat > "$TARGET_PLUGIN/hooks/hooks.json" <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --if-enabled",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/llm_wiki_session.py\" hook --harness codex --event-name Stop --if-enabled",
+            "commandWindows": "cmd.exe /d /s /c \"\"%PLUGIN_ROOT%\\hooks\\llm-wiki-hook.cmd\" hook --harness codex --event-name Stop --if-enabled\"",
             "timeout": 5,
             "statusMessage": "Saving llm-wiki session checkpoint"
           }
@@ -173,13 +180,14 @@ launcher = (
     "p=p if os.path.isfile(p) else (max(xs,key=os.path.getmtime) if xs else \"\"); "
     "sys.exit(0) if not p else None; "
     "sys.argv=[p,*sys.argv[1:]]; runpy.run_path(p,run_name=\"__main__\")' "
-    "hook --harness codex --if-enabled"
+    "hook --harness codex"
 )
-for entries in value["hooks"].values():
+for event_name, entries in value["hooks"].items():
     for entry in entries:
         for hook in entry["hooks"]:
-            hook["command"] = launcher
-path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+            hook["command"] = f"{launcher} --event-name {event_name} --if-enabled"
+with path.open("w", encoding="utf-8", newline="\n") as handle:
+    handle.write(json.dumps(value, indent=2) + "\n")
 PY
 
 cat > "$TARGET_SKILL/agents/openai.yaml" <<'EOF'
@@ -227,7 +235,7 @@ claude_manifest = Path(sys.argv[2])
 codex_manifest = Path(sys.argv[3])
 
 skill_path = target_skill / "SKILL.md"
-text = skill_path.read_text()
+text = skill_path.read_text(encoding="utf-8")
 
 frontmatter = """---
 name: wiki
@@ -244,7 +252,8 @@ description: >
   archive wiki, archive topic, restore wiki, private adapter, adapter registry, skill-factory,
   checkpoints,
   personal specialist, specialist skill, specialist reviewer, expert lens,
-  adapter route, adapter doctor, adapter run, edit an external resource, session capture, capture context, rehydrate,
+  adapter route, adapter doctor, adapter run, read, review, or edit a hosted external resource such as a document,
+  session capture, capture context, rehydrate,
   resume from session, implementation plan, or uses
   /wiki-style shorthand in a repo with .wiki/, ~/wiki/, or a configured hub path.
 ---
@@ -399,14 +408,15 @@ text = replace_section(
 """,
 )
 
-skill_path.write_text(text)
+with skill_path.open("w", encoding="utf-8", newline="\n") as handle:
+    handle.write(text)
 
 # references/ is a copied mirror of claude-plugin/skills/wiki-manager/references
 # and is shared verbatim — no per-file replacements needed. Source references
 # use runtime-neutral wording ("the agent") so they read correctly under both.
 
-claude = json.loads(claude_manifest.read_text())
-codex = json.loads(codex_manifest.read_text())
+claude = json.loads(claude_manifest.read_text(encoding="utf-8"))
+codex = json.loads(codex_manifest.read_text(encoding="utf-8"))
 codex["version"] = claude["version"]
 codex["name"] = "wiki"
 codex["license"] = claude.get("license", codex.get("license"))
@@ -451,7 +461,8 @@ idea_prompt = "Capture this rough Idea, research it, shape alternatives, and wai
 if idea_prompt not in prompts:
     prompts.insert(0, idea_prompt)
 interface["defaultPrompt"] = prompts
-codex_manifest.write_text(json.dumps(codex, indent=2) + "\n")
+with codex_manifest.open("w", encoding="utf-8", newline="\n") as handle:
+    handle.write(json.dumps(codex, indent=2) + "\n")
 PY
 
 echo "Synced Codex plugin skill from Claude source."

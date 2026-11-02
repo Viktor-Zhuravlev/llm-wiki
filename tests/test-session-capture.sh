@@ -26,6 +26,12 @@ else
   log_fail "scripts/llm-wiki-session compiles" "py_compile failed"
 fi
 
+if python3 "$SCRIPT_DIR/test-session-promotion.py"; then
+  log_pass "promotion notes preserve frontmatter and multiline content"
+else
+  log_fail "promotion notes preserve frontmatter and multiline content" "promotion regression"
+fi
+
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 hub="$tmpdir/wiki"
@@ -69,6 +75,39 @@ if [ -f "$default_hub/.sessions/state/codex/default-on.json" ]; then
 else
   log_fail "--if-enabled hook captures by default when no config exists" "missing default-on state"
 fi
+
+invalid_hub="$tmpdir/invalid-json-hub"
+mkdir -p "$invalid_hub"
+if printf 'not json' | "$SESSION" --hub "$invalid_hub" hook --harness codex --if-enabled >/dev/null 2>&1 \
+  && [ ! -e "$invalid_hub/.sessions/state" ]; then
+  log_pass "invalid hook JSON fails open without creating session state"
+else
+  log_fail "invalid hook JSON fails open without creating session state" "unexpected failure or state write"
+fi
+if printf 'not json' | "$SESSION" --hub "$invalid_hub" hook --harness codex --if-enabled --strict-json >/dev/null 2>&1; then
+  log_fail "--strict-json rejects invalid hook JSON" "unexpected zero exit"
+else
+  log_pass "--strict-json rejects invalid hook JSON"
+fi
+invalid_path="$tmpdir/not-a-directory"
+printf 'x' > "$invalid_path"
+if printf '{"session_id":"unexpected-error","hook_event_name":"PostToolUse"}' \
+  | "$SESSION" --hub "$invalid_path" hook --harness codex --if-enabled >/dev/null 2>&1; then
+  log_fail "unexpected hook failures remain visible" "unexpected zero exit"
+else
+  log_pass "unexpected hook failures remain visible"
+fi
+
+utf16_hub="$tmpdir/utf16-wiki"
+mkdir -p "$utf16_hub"
+python3 -c 'import sys; sys.stdout.buffer.write("{\"session_id\":\"utf16-input\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"PowerShell\"}".encode("utf-16"))' \
+  | "$SESSION" --hub "$utf16_hub" hook --harness codex --if-enabled
+if [ -f "$utf16_hub/.sessions/state/codex/utf16-input.json" ]; then
+  log_pass "hook accepts BOM-marked UTF-16 JSON from Windows PowerShell"
+else
+  log_fail "hook accepts BOM-marked UTF-16 JSON from Windows PowerShell" "state was not written"
+fi
+
 "$SESSION" --hub "$default_hub" disable >/dev/null
 printf '{"session_id":"disabled","hook_event_name":"PostToolUse","cwd":"%s","tool_name":"Bash"}' "$PWD" \
   | "$SESSION" --hub "$default_hub" hook --harness codex --if-enabled
@@ -205,6 +244,13 @@ else
   log_fail "balanced SessionStart hook emits additionalContext" "$session_start_output"
 fi
 
+user_prompt_output="$(printf '{"session_id":"test-session","hook_event_name":"UserPromptSubmit","cwd":"%s"}' "$PWD" | "$SESSION" --hub "$hub" hook --harness codex --if-enabled 2>&1)"
+if ! grep -q 'additionalContext' <<<"$user_prompt_output"; then
+  log_pass "balanced UserPromptSubmit keeps the prompt prefix unchanged"
+else
+  log_fail "balanced UserPromptSubmit repeated rehydration context" "$user_prompt_output"
+fi
+
 promote_output="$("$SESSION" --hub "$hub" promote codex:test-session --topic demo 2>&1)"
 if [ -f "$promote_output" ] \
   && grep -q 'Session Digest Promotion: codex:test-session' "$promote_output" \
@@ -215,11 +261,23 @@ else
   log_fail "promote creates topic raw note and index topic tag" "$promote_output"
 fi
 
+if python3 "$SCRIPT_DIR/test-session-promotion-records.py"; then
+  log_pass "promotion records stay in sync with session digest frontmatter"
+else
+  log_fail "promotion records stay in sync with session digest frontmatter" "regression test failed"
+fi
+
 list_output="$("$SESSION" --hub "$hub" list --json 2>&1)"
 if python3 -c 'import json,sys; data=json.load(sys.stdin); assert any(s.get("llm_wiki_session_id") == "codex:test-session" for s in data["sessions"])' <<<"$list_output"; then
   log_pass "list --json reports captured session"
 else
   log_fail "list --json reports captured session" "$list_output"
+fi
+
+if python3 "$SCRIPT_DIR/test-session-frontmatter.py"; then
+  log_pass "session frontmatter preserves scalar values across rewrites"
+else
+  log_fail "session frontmatter preserves scalar values across rewrites" "round-trip regression"
 fi
 
 echo ""
